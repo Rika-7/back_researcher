@@ -60,7 +60,11 @@ jobs:
 
       - name: Unzip artifact for deployment
         run: unzip release.zip
-
+        
+      - name: Wait for SCM stabilization
+        run: |
+          echo "Waiting for 30 seconds to ensure SCM stability..."
+          sleep 30
       
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
