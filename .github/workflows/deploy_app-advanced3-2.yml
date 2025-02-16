@@ -60,11 +60,7 @@ jobs:
 
       - name: Unzip artifact for deployment
         run: unzip release.zip
-        
-      - name: Wait for SCM stabilization
-        run: |
-          echo "Waiting for 30 seconds to ensure SCM stability..."
-          sleep 30
+
       
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
@@ -72,4 +68,4 @@ jobs:
         with:
           app-name: 'app-advanced3-2'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_D9E010789A2D45A4BEDBB1B00FF162E4 }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_526AA1A1B0374D9C9003B418DA38FF97 }}
