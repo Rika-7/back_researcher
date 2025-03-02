@@ -57,7 +57,7 @@ def get_db_connection():
 
 @app.get("/")
 def read_root():
-    return {"Hello": "World"}
+    return {"Hello": "World_updated"}
 
 @app.get("/researchers")
 def get_researchers():
