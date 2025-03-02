@@ -27,29 +27,33 @@ app.add_middleware(
 )
 
 #データベース接続情報の設定
+config = {
+    'host': os.getenv("DB_HOST"),
+    'user': os.getenv("DB_USER"),
+    'password': os.getenv("DB_PASSWORD"),
+    'database': os.getenv("DB_NAME"),
+    'charset': 'utf8mb4', # 日本語を扱うための設定
+}
+
+# If running on Azure, add SSL configuration
+if os.getenv("AZURE_DEPLOYMENT", "false").lower() == "true":
+    config.update({
+        'client_flags': [mysql.connector.ClientFlag.SSL],
+        'ssl_ca': '/home/site/certificates/DigiCertGlobalRootCA.crt.pem'
+    })
+
+#データベース接続情報の設定
 def get_db_connection():
-    # Database connection configuration
-    config = {
-        'host': os.getenv("DB_HOST"),
-        'user': os.getenv("DB_USER"),
-        'password': os.getenv("DB_PASSWORD"),
-        'database': os.getenv("DB_NAME"),
-        'charset': 'utf8mb4', # For Japanese characters
-    }
-    
-    # If running on Azure, add SSL configuration
-    if os.getenv("AZURE_DEPLOYMENT", "false").lower() == "true":
-        config.update({
-            'client_flags': [mysql.connector.ClientFlag.SSL],
-            'ssl_ca': '/home/site/certificates/DigiCertGlobalRootG2.crt.pem'
-        })
-    
     try:
         conn = mysql.connector.connect(**config)
         return conn
     except mysql.connector.Error as err:
-        print(f"Database connection error: {err}")
-        return None
+        if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
+            raise HTTPException(status_code=500, detail="Database access denied")
+        elif err.errno == errorcode.ER_BAD_DB_ERROR:
+            raise HTTPException(status_code=500, detail="Database does not exist")
+        else:
+            raise HTTPException(status_code=500, detail=str(err))
 
 @app.get("/")
 def read_root():
