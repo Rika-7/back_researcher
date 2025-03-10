@@ -7,7 +7,8 @@ import mysql.connector
 from mysql.connector import errorcode
 import os
 from dotenv import load_dotenv
-from datetime import datetime 
+from datetime import datetime
+from search_vector import search_researchers
 
 # Load environment variables from .env file
 load_dotenv()
@@ -26,13 +27,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-#データベース接続情報の設定
+# データベース接続情報の設定
 config = {
     'host': os.getenv("DB_HOST"),
     'user': os.getenv("DB_USER"),
     'password': os.getenv("DB_PASSWORD"),
     'database': os.getenv("DB_NAME"),
-    'charset': 'utf8mb4', # 日本語を扱うための設定
+    'charset': 'utf8mb4',  # 日本語を扱うための設定
 }
 
 # If running on Azure, add SSL configuration
@@ -42,29 +43,36 @@ if os.getenv("AZURE_DEPLOYMENT", "false").lower() == "true":
         'ssl_ca': '/home/site/certificates/DigiCertGlobalRootCA.crt.pem'
     })
 
-#データベース接続情報の設定
+# データベース接続情報の設定
+
+
 def get_db_connection():
     try:
         conn = mysql.connector.connect(**config)
         return conn
     except mysql.connector.Error as err:
         if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
-            raise HTTPException(status_code=500, detail="Database access denied")
+            raise HTTPException(
+                status_code=500, detail="Database access denied")
         elif err.errno == errorcode.ER_BAD_DB_ERROR:
-            raise HTTPException(status_code=500, detail="Database does not exist")
+            raise HTTPException(
+                status_code=500, detail="Database does not exist")
         else:
             raise HTTPException(status_code=500, detail=str(err))
+
 
 @app.get("/")
 def read_root():
     return {"Hello": "World_updated"}
 
+
 @app.get("/researchers")
 def get_researchers():
     conn = get_db_connection()
     if not conn:
-        raise HTTPException(status_code=500, detail="Database connection failed")
-    
+        raise HTTPException(
+            status_code=500, detail="Database connection failed")
+
     try:
         cursor = conn.cursor(dictionary=True)
         cursor.execute("SELECT * FROM researcher_tsukuba LIMIT 10")
@@ -75,3 +83,38 @@ def get_researchers():
     finally:
         cursor.close()
         conn.close()
+
+
+# リクエストモデル
+class SearchRequest(BaseModel):
+    category: str
+    field: str
+    description: str
+    top_k: int = 10  # 10件取得
+
+# レスポンスモデル
+
+
+class ResearcherResponse(BaseModel):
+    researcher_id: str
+    research_field_jp: str
+    keywords_jp: str
+    research_project_title: str
+    explanation: str
+    score: float
+
+
+@app.post("/search_researchers", response_model=List[ResearcherResponse])
+async def search_researchers_api(request: SearchRequest):
+    try:
+        search_results = search_researchers(
+            category=request.category,
+            field=request.field,
+            description=request.description,
+            top_k=request.top_k
+        )
+        return search_results
+    except Exception as e:
+        error_message = str(e)
+        traceback.print_exc()  # エラーログを出力
+        raise HTTPException(status_code=500, detail=error_message)
