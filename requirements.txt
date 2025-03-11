@@ -3,3 +3,7 @@ uvicorn==0.32.1
 sqlalchemy==2.0.37
 mysql-connector-python==9.0.0
 python-dotenv==1.0.1
+pandas
+openai
+azure-search-documents
+azure-core
