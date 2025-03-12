@@ -17,34 +17,34 @@ load_dotenv()
 
 print("Environment variables loaded from .env file")
 
-# 環境変数からAzureのAPIキーを取得
-AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
-AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-AZURE_OPENAI_GPT_API_KEY = os.getenv("AZURE_OPENAI_GPT_API_KEY")
-AZURE_OPENAI_GPT_ENDPOINT = os.getenv("AZURE_OPENAI_GPT_ENDPOINT")
-AZURE_SEARCH_API_KEY = os.getenv("AZURE_SEARCH_API_KEY") or ""
-AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
-AZURE_SEARCH_INDEX_NAME = os.getenv("AZURE_SEARCH_INDEX_NAME")
-AZURE_OPENAI_GPT_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_GPT_DEPLOYMENT_NAME")
+# Environment variables with proper string defaults
+AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "")
+AZURE_OPENAI_GPT_API_KEY = os.getenv("AZURE_OPENAI_GPT_API_KEY", "")
+AZURE_OPENAI_GPT_ENDPOINT = os.getenv("AZURE_OPENAI_GPT_ENDPOINT", "")
+AZURE_SEARCH_API_KEY = os.getenv("AZURE_SEARCH_API_KEY", "")  # Default to empty string
+AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT", "")
+AZURE_SEARCH_INDEX_NAME = os.getenv("AZURE_SEARCH_INDEX_NAME", "")
+AZURE_OPENAI_GPT_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_GPT_DEPLOYMENT_NAME", "")
 
-# Initialize Azure OpenAI client (new style)
+# Initialize Azure OpenAI client (fixed for newer version compatibility)
 azure_openai_client = AzureOpenAI(
     api_key=AZURE_OPENAI_API_KEY,
     api_version="2023-07-01-preview",
     azure_endpoint=AZURE_OPENAI_ENDPOINT
 )
 
-# Azure AI Search クライアント設定
+# Azure AI Search client setting with proper string handling
 search_client = SearchClient(
     endpoint=AZURE_SEARCH_ENDPOINT,
     index_name=AZURE_SEARCH_INDEX_NAME,
-    credential=AzureKeyCredential(AZURE_SEARCH_API_KEY)
+    credential=AzureKeyCredential(AZURE_SEARCH_API_KEY)  # Ensuring it's a string
 )
 
-# ヘルパー関数：インデックスの構造を調べる
+# Helper function: Examine index structure
 def explore_index_structure():
     try:
-        # 最初のドキュメントを取得してフィールド構造を確認
+        # Get first document to check field structure
         results = search_client.search(search_text="*", top=1)
         sample_doc = next(results, None)
         
@@ -63,7 +63,7 @@ def explore_index_structure():
         print(f"インデックス構造の確認中にエラーが発生しました: {str(e)}")
         return False
 
-# 埋め込みを取得する関数
+# Get embedding function
 def get_embedding(text):
     response = azure_openai_client.embeddings.create(
         input=text,
@@ -71,7 +71,7 @@ def get_embedding(text):
     )
     return response.data[0].embedding
 
-# ChatGPTの応答設定
+# ChatGPT response settings
 def get_openai_response(messages):
     """
     Azure OpenAI Serviceにチャットメッセージを送信し、応答を取得する関数。
@@ -110,10 +110,9 @@ def get_openai_response(messages):
         raise Exception(
             f"Request failed with status code {response.status_code}: {response.text}")
 
-# 研究者のマッチ理由を生成
+# Generate explanation for researcher match
 def generate_explanation(query_text, researcher):
-    # 以前は research_field_jp と keywords_jp を使っていたが、
-    # インデックスに存在するフィールド名を使用するよう修正
+    # Use fields that exist in the index
     research_field = researcher.get("research_field_pi", researcher.get("research_field_jp", ""))
     keywords = researcher.get("keywords_pi", researcher.get("keywords_jp", ""))
     title = researcher.get("research_project_title", "")
@@ -131,23 +130,28 @@ def generate_explanation(query_text, researcher):
 
     return get_openai_response(messages)
 
-# ベクトル検索
+# Vector search
 def search_researchers(category, field, description, top_k=10):
     query_text = f"{category} {field} {description}"
-    embedding = get_embedding(query_text)
+    
+    try:
+        embedding = get_embedding(query_text)
+    except Exception as e:
+        print(f"Error getting embedding: {str(e)}")
+        return []
 
-    # まずインデックスの構造を探索
+    # Explore index structure first
     explore_index_structure()
 
     try:
-        # ベクトル検索を実行
+        # Execute vector search
         results = search_client.search(
-            search_text=None,  # ベクトル検索のみ行う場合はテキストクエリは空None
+            search_text=None,  # No text query for vector-only search
             vector_queries=[
                 VectorizedQuery(
                     vector=embedding,
                     k_nearest_neighbors=top_k,
-                    fields="research_field_vectorization"  # 正しいフィールド名
+                    fields="research_field_vectorization"  # Correct field name
                 )
             ],
             select=["id", "researcher_id", "research_field_pi", "keywords_pi", "research_project_title"]
@@ -166,18 +170,17 @@ def search_researchers(category, field, description, top_k=10):
                     "keywords_pi": result.get("keywords_pi", result.get("keywords_jp", "不明")),
                     "research_project_title": result.get("research_project_title", "不明"),
                     "explanation": explanation,
-                    "score": result.get('@search.score', 0),  # スコア取得
+                    "score": result.get('@search.score', 0),  # Get score
                 })
             except Exception as e:
-                print(f"結果 {result_count} の処理中にエラーが発生しました: {str(e)}")
+                print(f"Error processing result {result_count}: {str(e)}")
         
         return search_results
     
     except Exception as e:
-        print(f"検索中にエラーが発生しました: {str(e)}")
+        print(f"Search error: {str(e)}")
         if "Cannot find nested property" in str(e):
-            print("エラー解決のヒント: インデックスのフィールド名が一致していない可能性があります。")
-            print("register_index.py を実行して正しいフィールド定義のインデックスを作成してから、研究者データを登録してください。")
+            print("Error hint: Index field names might not match. Run register_index.py to create a properly defined index and register researcher data.")
         return []
 
 # Test functionality when run directly
