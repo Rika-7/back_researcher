@@ -8,7 +8,15 @@ from mysql.connector import errorcode
 import os
 from dotenv import load_dotenv
 from datetime import datetime
-from search_vector import search_researchers
+import traceback  # Add traceback for better error logging
+
+# Import with try-except to handle potential import errors
+try:
+    from search_vector import search_researchers
+    print("Successfully imported search_researchers")
+except Exception as e:
+    print(f"Error importing search_researchers: {str(e)}")
+    traceback.print_exc()
 
 # Load environment variables from .env file
 load_dotenv()
@@ -42,9 +50,6 @@ if os.getenv("AZURE_DEPLOYMENT", "false").lower() == "true":
         'client_flags': [mysql.connector.ClientFlag.SSL],
         'ssl_ca': '/home/site/certificates/DigiCertGlobalRootCA.crt.pem'
     })
-
-# データベース接続情報の設定
-
 
 def get_db_connection():
     try:
@@ -81,8 +86,10 @@ def get_researchers():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        cursor.close()
-        conn.close()
+        if 'cursor' in locals() and cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 # リクエストモデル
@@ -93,8 +100,6 @@ class SearchRequest(BaseModel):
     top_k: int = 10  # 10件取得
 
 # レスポンスモデル
-
-
 class ResearcherResponse(BaseModel):
     researcher_id: str
     research_field_jp: str
@@ -107,14 +112,34 @@ class ResearcherResponse(BaseModel):
 @app.post("/search_researchers", response_model=List[ResearcherResponse])
 async def search_researchers_api(request: SearchRequest):
     try:
+        print(f"Received search request: {request.dict()}")
+        
+        if 'search_researchers' not in globals():
+            raise HTTPException(
+                status_code=500, 
+                detail="search_researchers function not available. Check module import."
+            )
+            
         search_results = search_researchers(
             category=request.category,
             field=request.field,
             description=request.description,
             top_k=request.top_k
         )
+        
+        if not search_results:
+            print("No search results returned")
+            return []
+            
+        print(f"Found {len(search_results)} results")
         return search_results
+        
     except Exception as e:
         error_message = str(e)
-        traceback.print_exc()  # エラーログを出力
+        print(f"Error in search_researchers_api: {error_message}")
+        traceback.print_exc()  # Print full traceback for debugging
         raise HTTPException(status_code=500, detail=error_message)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
