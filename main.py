@@ -1,144 +1,158 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Optional
-import mysql.connector
-from mysql.connector import errorcode
-import os
-from dotenv import load_dotenv
-from datetime import datetime
-import traceback  # Add traceback for better error logging
+from typing import List
+from sqlalchemy.orm import Session
+from database import get_db, engine, Base
+import models
 
-# Import with try-except to handle potential import errors
-try:
-    from search_vector import search_researchers
-    print("Successfully imported search_researchers")
-except Exception as e:
-    print(f"Error importing search_researchers: {str(e)}")
-    traceback.print_exc()
+app = FastAPI(title="Research API")
 
-# Load environment variables from .env file
-load_dotenv()
-
-app = FastAPI()
-
-# CORSミドルウェアを追加
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://app-advanced3-4-aygnfjh3hxbyducf.canadacentral-01.azurewebsites.net",  # Production
-        "http://localhost:3000",  # Local development
+        "https://app-advanced3-4-aygnfjh3hxbyducf.canadacentral-01.azurewebsites.net",
+        "http://localhost:3000",
+        "http://0.0.0.0:8000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# データベース接続情報の設定
-config = {
-    'host': os.getenv("DB_HOST"),
-    'user': os.getenv("DB_USER"),
-    'password': os.getenv("DB_PASSWORD"),
-    'database': os.getenv("DB_NAME"),
-    'charset': 'utf8mb4',  # 日本語を扱うための設定
-}
-
-# If running on Azure, add SSL configuration
-if os.getenv("AZURE_DEPLOYMENT", "false").lower() == "true":
-    config.update({
-        'client_flags': [mysql.connector.ClientFlag.SSL],
-        'ssl_ca': '/home/site/certificates/DigiCertGlobalRootCA.crt.pem'
-    })
-
-def get_db_connection():
-    try:
-        conn = mysql.connector.connect(**config)
-        return conn
-    except mysql.connector.Error as err:
-        if err.errno == errorcode.ER_ACCESS_DENIED_ERROR:
-            raise HTTPException(
-                status_code=500, detail="Database access denied")
-        elif err.errno == errorcode.ER_BAD_DB_ERROR:
-            raise HTTPException(
-                status_code=500, detail="Database does not exist")
-        else:
-            raise HTTPException(status_code=500, detail=str(err))
-
-
 @app.get("/")
 def read_root():
-    return {"Hello": "World_updated"}
+    return {"Hello": "World"}
 
 
-@app.get("/researchers")
-def get_researchers():
-    conn = get_db_connection()
-    if not conn:
-        raise HTTPException(
-            status_code=500, detail="Database connection failed")
-
-    try:
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM researcher_tsukuba LIMIT 10")
-        researchers = cursor.fetchall()
-        return {"researchers": researchers}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if 'cursor' in locals() and cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+# Researcher取得
+@app.get("/researchers", tags=["Researchers"])
+def get_researchers(db: Session = Depends(get_db)):
+    researchers = db.query(models.ResearcherInformation).limit(10).all()
+    result = []
+    for r in researchers:
+        result.append({
+            "researcher_id": r.researcher_id,
+            "researcher_name": r.researcher_name,
+            "position": r.researcher_position_current,
+            "research_field": r.research_field_pi,
+            "keywords": r.keywords_pi,
+        })
+    return {"status": "success", "researchers": result}
 
 
-# リクエストモデル
-class SearchRequest(BaseModel):
-    category: str
-    field: str
-    description: str
-    top_k: int = 10  # 10件取得
+@app.get("/search-researcher")
+def search_researcher(name: str, db: Session = Depends(get_db)):
+    researchers = db.query(models.ResearcherInformation).filter(
+        models.ResearcherInformation.researcher_name.ilike(f"%{name}%")
+    ).all()
 
-# レスポンスモデル
-class ResearcherResponse(BaseModel):
-    researcher_id: str
-    research_field_jp: str
-    keywords_jp: str
-    research_project_title: str
-    explanation: str
-    score: float
+    if not researchers:
+        return {"status": "not_found"}
+
+    return {
+        "status": "success",
+        "researchers": [
+            {
+                "researcher_id": r.researcher_id,
+                "researcher_name": r.researcher_name,
+                "researcher_affiliation_current": r.researcher_affiliation_current,
+                "researcher_department_current": r.researcher_department_current,
+            }
+            for r in researchers
+        ]
+    }
+
+@app.get("/matching-information", tags=["Matching"])
+def get_matching(
+    researcher_id: int = Query(..., description="研究者ID"),
+    matching_status: int = Query(..., description="マッチングステータス"),
+    db: Session = Depends(get_db)
+):
+    matchings = db.query(models.MatchingInformation).filter(
+        models.MatchingInformation.researcher_id == researcher_id,
+        models.MatchingInformation.matching_status == matching_status
+    ).all()
+
+    result = []
+    for m in matchings:
+        result.append({
+            "matching_id": m.matching_id,
+            "project_id": m.project_id,
+            "researcher_id": m.researcher_id,
+            #"matching_reason":m.matching_reason,
+            "project_title": m.project.project_title,
+            "consultation_category": m.project.consultation_category,
+            "project_content": m.project.project_content,
+            "research_field": m.project.research_field,
+            #"project_status": m.project.project_status,
+            "application_deadline": m.project.application_deadline,
+            "budget": m.project.budget,
+            #"preferred_researcher_level": m.project.preferred_researcher_level,
+            "company_user_name": m.project.company_user.company_user_name if m.project and m.project.company_user else None,
+            "department": m.project.company_user.department if m.project and m.project.company_user else None,
+            "company_name": m.project.company_user.company.company_name if m.project and m.project.company_user and m.project.company_user.company else None,
+        })
+
+    return {"status": "success", "projects": result, "total": len(result)}
+
+@app.get("/matching-id/{matching_id}", tags=["Matching"])
+def get_project_by_id(
+    matching_id: int,
+    db: Session = Depends(get_db)
+):
+    matching = db.query(models.MatchingInformation).filter(
+        models.MatchingInformation.matching_id == matching_id
+    ).first()
+
+    if not matching:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    project = matching.project
+    company_user = project.company_user if project else None
+    company = company_user.company if company_user else None
+
+    result = {
+        "matching_id": matching.matching_id,
+        "project_id": matching.project_id,
+        "researcher_id": matching.researcher_id,
+        "matching_status": matching.matching_status,
+        "matched_date": matching.matched_date,
+        #"matching_reason": matching.matching_reason,
+        "project_title": project.project_title if project else None,
+        "consultation_category": project.consultation_category if project else None,
+        "project_content": project.project_content if project else None,
+        "research_field": project.research_field if project else None,
+        #"project_status": project.project_status if project else None,
+        "application_deadline": project.application_deadline if project else None,
+        "budget": project.budget if project else None,
+        #"preferred_researcher_level": project.preferred_researcher_level if project else None,
+        "company_user_name": company_user.company_user_name if company_user else None,
+        "department": company_user.department if company_user else None,
+        "company_name": company.company_name if company else None
+    }
+
+    return {"status": "success", "project": result}
 
 
-@app.post("/search_researchers", response_model=List[ResearcherResponse])
-async def search_researchers_api(request: SearchRequest):
-    try:
-        print(f"Received search request: {request.dict()}")
-        
-        if 'search_researchers' not in globals():
-            raise HTTPException(
-                status_code=500, 
-                detail="search_researchers function not available. Check module import."
-            )
-            
-        search_results = search_researchers(
-            category=request.category,
-            field=request.field,
-            description=request.description,
-            top_k=request.top_k
-        )
-        
-        if not search_results:
-            print("No search results returned")
-            return []
-            
-        print(f"Found {len(search_results)} results")
-        return search_results
-        
-    except Exception as e:
-        error_message = str(e)
-        print(f"Error in search_researchers_api: {error_message}")
-        traceback.print_exc()  # Print full traceback for debugging
-        raise HTTPException(status_code=500, detail=error_message)
+@app.patch("/matching-status/{matching_id}", tags=["Matching"])
+def update_matching_status(
+    matching_id: int,
+    new_status: int = Query(..., description="新しいマッチングステータス"),
+    db: Session = Depends(get_db)
+):
+    matching = db.query(models.MatchingInformation).filter(
+        models.MatchingInformation.matching_id == matching_id
+    ).first()
+
+    if not matching:
+        raise HTTPException(status_code=404, detail="Matching not found")
+
+    matching.matching_status = new_status
+    db.commit()
+    db.refresh(matching)
+
+    return {"status": "success", "matching_id": matching_id, "new_status": new_status}
 
 if __name__ == "__main__":
     import uvicorn
